@@ -12,6 +12,7 @@
 class UStaticMeshComponent;
 class ACG_PlayerCharacter;
 class APlayerController;
+class UCG_SpellTargetStats;
 
 // ============================================================
 UENUM(BlueprintType, Meta = (Bitflags, UseEnumValuesAsMaskValuesInEditor = "true"))
@@ -44,6 +45,8 @@ public:
 	UFUNCTION(BlueprintNativeEvent)
 	void OnEndInspection(FVector throwVector, float throwStrength, bool shouldThrow = true);
 	void OnEndInspection_Implementation(FVector throwVector, float throwStrength, bool shouldThrow = true);
+	
+	FORCEINLINE UCG_SpellTargetStats * GetStats() const;
 
 protected:
 	UFUNCTION(BlueprintImplementableEvent)
@@ -63,7 +66,18 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Gameplay)
 	TObjectPtr<USceneComponent> InspectionCenter;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Gameplay)
+	TObjectPtr<UCG_SpellTargetStats> Stats;
+
 	UPROPERTY(EditAnywhere, Meta = (Bitmask, BitmaskEnum = "EInteractableFlags"))
 	uint8 Interactions;
-
 };
+
+// ============================================================
+// Inlined Functions
+// -----------------------------------------------------------------------------------------
+FORCEINLINE UCG_SpellTargetStats * ACG_InteractableBase::GetStats() const
+{
+	return Stats;
+}
+// ============================================================

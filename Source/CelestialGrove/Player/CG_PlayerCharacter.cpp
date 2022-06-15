@@ -8,8 +8,8 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "CG_InteractableBase.h"
-#include "CG_GlobalDefines.h"
 #include "GameFramework/PlayerController.h"
+#include "CG_SpellBase.h"
 
 // -----------------------------------------------------------------------------------------
 ACG_PlayerCharacter::ACG_PlayerCharacter()
@@ -44,6 +44,15 @@ ACG_PlayerCharacter::ACG_PlayerCharacter()
 
 	MouseSensitivity = FVector2D(1.f, 1.f);
 	ThrowStrength = 800.f;
+
+	Stats = NewObject<UCG_SpellTargetStats>(UCG_SpellTargetStats::StaticClass());
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_PlayerCharacter::BeginPlay()
+{
+	check(Stats);
+	Stats->owningActor = this;
 }
 
 // -----------------------------------------------------------------------------------------
@@ -67,6 +76,16 @@ void ACG_PlayerCharacter::Tick(float deltaTime)
 
 	switch(CurrentState)
 	{
+		// ============================================================
+		case EPlayerState::DEFAULT:
+		{
+			for (uint8 spellIndex : SpellsBeingCast)
+			{
+				EquippedSpells[spellIndex]->UpdateSpell(deltaTime, this);
+			}
+		}
+		break;
+
 		// ============================================================
 		case EPlayerState::INSPECTING:
 		{
@@ -121,6 +140,121 @@ void ACG_PlayerCharacter::Tick(float deltaTime)
 		}
 		break;
 	}
+}
+
+// -----------------------------------------------------------------------------------------
+bool ACG_PlayerCharacter::TryCastingSpell(uint8 spellIndex)
+{
+	check(EquippedSpells.Num() > spellIndex);
+
+	if (!EquippedSpells[spellIndex]->IsSpellOnCooldown())
+	{
+		EquippedSpells[spellIndex]->OnBeginCast(this);
+		return true;
+	}
+
+	return false;
+}
+
+// -----------------------------------------------------------------------------------------
+bool ACG_PlayerCharacter::TraceForCollision(FHitResult & result, float distance) const
+{
+	FVector startOfTrace = FirstPersonCamera->GetComponentLocation();
+	FVector endOfTrace = startOfTrace + (FirstPersonCamera->GetForwardVector() * distance);
+
+	FCollisionQueryParams params = FCollisionQueryParams::DefaultQueryParam;
+	params.TraceTag = TEXT("Spell Trace");
+	params.OwnerTag = GetFName(); 
+	params.AddIgnoredActor(this);
+
+	return GetWorld()->LineTraceSingleByChannel(
+												result,
+												startOfTrace,
+												endOfTrace,
+												SPELL_TRACE_CHANNEL,
+												params
+											   );
+}
+
+// -----------------------------------------------------------------------------------------
+bool ACG_PlayerCharacter::GetTargetsInSphere(ESpellCollisionType type, float radius, FVector & location, TArray<UCG_SpellTargetStats*> & targets) const
+{
+	TArray<FOverlapResult> overlaps;
+
+	FCollisionObjectQueryParams objParams;
+	switch(type)
+	{
+		case ESpellCollisionType::ALL:
+			objParams = FCollisionObjectQueryParams(SPELL_TRACE_CHANNEL);
+		break;
+
+		case ESpellCollisionType::INANIMATE_ONLY:
+			objParams = FCollisionObjectQueryParams(INANIMATE_COLLISION_CHANNEL);
+		break;
+
+		case ESpellCollisionType::ANIMATE_ONLY:
+			objParams = FCollisionObjectQueryParams(INANIMATE_COLLISION_CHANNEL);
+		break;
+	}
+
+	FCollisionShape shape {};
+	shape.SetSphere(radius);
+
+	FCollisionQueryParams params = FCollisionQueryParams::DefaultQueryParam;
+	params.TraceTag = TEXT("Interaction Trace");
+	params.OwnerTag = GetFName(); 
+	params.AddIgnoredActor(this);
+
+	bool res = GetWorld()->OverlapMultiByObjectType(
+													overlaps,
+													location,
+													FQuat::Identity,
+													objParams,
+													shape,
+													params
+												   );
+	
+	if (res)
+	{
+		for (const FOverlapResult & overlap : overlaps)
+		{
+			if ((type == ESpellCollisionType::ALL || type == ESpellCollisionType::INANIMATE_ONLY) &&
+				overlap.GetActor()->GetClass() == ACG_InteractableBase::StaticClass())
+			{
+				targets.Emplace(Cast<ACG_InteractableBase>(overlap.GetActor())->GetStats());
+			}
+			/* TODO(RyanC): Uncomment when enemy characters are implemented
+			else if ((type == ESpellCollisionType::ALL || type == ESpellCollisionType::ANIMATE_ONLY) &&
+					overlap.GetActor()->GetClass() == ACG_EnemyCharacter::StaticClass())
+			{
+				targets.Emplace(Cast<ACG_EnemyCharacter>(overlap.GetActor())->Stats);
+			}*/
+		}
+	}
+
+	return res;
+}
+
+// -----------------------------------------------------------------------------------------
+bool ACG_PlayerCharacter::GetTargetsInCone(ESpellCollisionType type, float radius, float angle, TArray<UCG_SpellTargetStats*> & targets) const
+{
+	FVector origin = GetActorLocation();
+	bool res = GetTargetsInSphere(type, radius, origin, targets);
+
+	if (res)
+	{
+		for (uint32 i = targets.Num() - 1; i >= 0; --i)
+		{
+			FVector originToActor = targets[i]->owningActor->GetActorLocation() - origin;
+			float dot = FVector::DotProduct(originToActor, GetActorForwardVector());
+			if (FMath::Acos(dot) > angle)
+			{
+				targets.RemoveAt(i);
+			}
+		}
+	}
+
+	return res;
 }
 
 // -----------------------------------------------------------------------------------------

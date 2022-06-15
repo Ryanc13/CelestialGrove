@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerController.h"
 #include "CG_PlayerCharacter.h"
 #include "CG_GlobalDefines.h"
+#include "CG_SpellBase.h"
 
 // -----------------------------------------------------------------------------------------
 ACG_InteractableBase::ACG_InteractableBase()
@@ -22,6 +23,8 @@ ACG_InteractableBase::ACG_InteractableBase()
 
 	InspectionCenter = CreateDefaultSubobject<USceneComponent>(TEXT("Inspection Center"));
 	InspectionCenter->SetupAttachment(StaticMesh);
+
+	Stats = NewObject<UCG_SpellTargetStats>(UCG_SpellTargetStats::StaticClass());
 }
 
 // -----------------------------------------------------------------------------------------

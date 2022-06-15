@@ -9,6 +9,9 @@
 #define CLEAR_FLAG(field, flag) (field = field & ~flag)
 
 #define INTERACTABLE_COLLISION_CHANNEL ECollisionChannel::ECC_GameTraceChannel1
+#define SPELL_TRACE_CHANNEL ECollisionChannel::ECC_GameTraceChannel2
+#define INANIMATE_COLLISION_CHANNEL ECollisionChannel::ECC_GameTraceChannel3
+#define ANIMATE_COLLISION_CHANNEL ECollisionChannel::ECC_GameTraceChannel4
 
 #define internal static
 #define global static
