@@ -9,6 +9,7 @@
 #include "GameFramework/Character.h"
 #include "CG_GlobalDefines.h"
 #include "UObject/NoExportTypes.h"
+#include "CG_GlobalDefines.h"
 #include "CG_PlayerCharacter.generated.h"
 
 class UCameraComponent;
@@ -27,19 +28,6 @@ enum class EPlayerState : uint8
 };
 
 // ============================================================
-UENUM(BlueprintType, Meta = (Bitflags, UseEnumValuesAsMaskValuesInEditor = "true"))
-enum class ECombatStatuses : uint8
-{
-	NONE = 0x00,
-	HELD = 0x01,
-	ON_FIRE = 0x02,
-	STUNNED = 0x04,
-	DEATH = 0x08
-};
-
-ENUM_CLASS_FLAGS(ECombatStatuses);
-
-// ============================================================
 UENUM(BlueprintType)
 enum class ESpellCollisionType : uint8
 {
@@ -47,48 +35,6 @@ enum class ESpellCollisionType : uint8
 	INANIMATE_ONLY,
 	ANIMATE_ONLY
 };
-
-// ============================================================
-UCLASS()
-class CELESTIALGROVE_API UCG_SpellTargetStats : public UObject
-{
-	GENERATED_BODY()
-
-public:
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	uint8 Health;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Meta = (Bitmask, BitmaskEnum = "ECombatStatuses"))
-	uint8 Status;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	TWeakObjectPtr<AActor> owningActor;
-
-	UFUNCTION(BlueprintCallable)
-	FORCEINLINE bool HasStatus(UPARAM(Meta = (Bitmask, BitmaskEnum = ECombatStatuses)) uint8 flag);
-
-	UFUNCTION(BlueprintCallable)
-	FORCEINLINE void SetStatus(UPARAM(Meta = (Bitmask, BitmaskEnum = ECombatStatuses)) uint8 flag);
-};
-
-// ============================================================
-// FTargetPair Inlines
-// -----------------------------------------------------------------------------------------
-FORCEINLINE bool UCG_SpellTargetStats::HasStatus(uint8 flag)
-{
-	if (flag == 0)
-	{
-		return (Status == 0);
-	}
-
-	return COMPARE_FLAG(Status, flag);
-}
-// -----------------------------------------------------------------------------------------
-FORCEINLINE void UCG_SpellTargetStats::SetStatus(uint8 flag)
-{
-	SET_FLAG(Status, flag);
-}
-// ============================================================
 
 // ============================================================
 UCLASS()
@@ -106,19 +52,30 @@ public:
 	void BeginInspection(ACG_InteractableBase * const interactable);
 
 	UFUNCTION(BlueprintCallable)
-	bool TryCastingSpell(uint8 spellIndex);
-
-	UFUNCTION(BlueprintCallable)
 	bool TraceForCollision(FHitResult & result, float distance) const;
 
 	UFUNCTION(BlueprintCallable)
-	bool GetTargetsInSphere(ESpellCollisionType type, float radius, UPARAM(ref) FVector & location, TArray<UCG_SpellTargetStats*> & targets) const;
+	bool GetTargetsInSphere(ESpellCollisionType type, float radius, UPARAM(ref) FVector & location, TArray<FCG_SpellTarget> & targets) const;
 
 	UFUNCTION(BlueprintCallable)
-	bool GetTargetsInCone(ESpellCollisionType type, float radius, float angle, TArray<UCG_SpellTargetStats*> & targets) const;
+	bool GetTargetsInCone(ESpellCollisionType type, float radius, float angle, TArray<FCG_SpellTarget> & targets) const;
+
+	UFUNCTION(BlueprintImplementableEvent, BlueprintCallable)
+	bool CreateProjectile(FVector direction, float speed, UCG_SpellBase * spell);
+
+	UFUNCTION(BlueprintCallable)
+	void SpellFinishedCasting(UCG_SpellBase * spell);
+
+	UFUNCTION(BlueprintCallable)
+	void ApplyDamage(int32 damage);
+
+	UFUNCTION(BlueprintCallable)
+	void ApplyStatus(uint8 status);
+
+	UFUNCTION(BlueprintCallable)
+	void ApplyForce(FVector direction, float strength);
 
 	FORCEINLINE bool ShouldUpdatePlayer() const;
-	FORCEINLINE UCG_SpellTargetStats * GetStats() const;
 
 protected:
 // ============================================================
@@ -131,6 +88,12 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent)
 	void ChangeHUD(EPlayerState curState);
 
+	UFUNCTION(BlueprintImplementableEvent)
+	void OnDamaged();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void OnDeath();
+
 // ============================================================
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Camera)
 	TObjectPtr<UCameraComponent> FirstPersonCamera;
@@ -138,11 +101,17 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = Gameplay)
 	EPlayerState CurrentState;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = Gameplay)
+	FCG_Stats Stats;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = Gameplay)
-	TObjectPtr<UCG_SpellTargetStats> Stats;
+	FCG_SpellTarget Target;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = Gameplay)
 	TArray<TObjectPtr<UCG_SpellBase>> EquippedSpells;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Gameplay")
+	float MovementSpeed;
 
 	// ============================================================
 	// Inspection uproperties
@@ -178,15 +147,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gameplay")
 	float ThrowStrength;
 
-	// Non-UPROPERTY member variables
-	// ============================================================
-	FVector2D MouseDelta;
-	uint32 isDraggingForInspection:1;
-
 private:
 	// ============================================================
 	// Input events
 	void Interact();
+	void CastSpell();
 	void QuitInspection();
 	void StartInspectionRotation();
 	void StopInspectionRotation();
@@ -203,13 +168,22 @@ private:
 
 	FORCEINLINE bool IsMovementDisabled() const;
 	FORCEINLINE bool IsMouseDisabled() const;
+	FORCEINLINE bool IsCastingDisabled() const;
 
 	// ============================================================
-	TArray<uint8> SpellsBeingCast;
+	FVector2D MouseDelta;
+	uint32 isDraggingForInspection:1;
+	uint8 ActiveSpell;
 };
 
 // ============================================================
 // Inlined Functions
+// -----------------------------------------------------------------------------------------
+FORCEINLINE bool ACG_PlayerCharacter::ShouldUpdatePlayer() const
+{
+	return (CurrentState == EPlayerState::INSPECTING ||
+			CurrentState == EPlayerState::PAUSED);
+}
 // -----------------------------------------------------------------------------------------
 FORCEINLINE bool ACG_PlayerCharacter::IsMovementDisabled() const
 {
@@ -224,14 +198,10 @@ FORCEINLINE bool ACG_PlayerCharacter::IsMouseDisabled() const
 			CurrentState == EPlayerState::PAUSED);
 }
 // -----------------------------------------------------------------------------------------
-FORCEINLINE bool ACG_PlayerCharacter::ShouldUpdatePlayer() const
+FORCEINLINE bool ACG_PlayerCharacter::IsCastingDisabled() const
 {
 	return (CurrentState == EPlayerState::INSPECTING ||
+			CurrentState == EPlayerState::INVENTORY ||
 			CurrentState == EPlayerState::PAUSED);
-}
-// -----------------------------------------------------------------------------------------
-FORCEINLINE UCG_SpellTargetStats * ACG_PlayerCharacter::GetStats() const
-{
-	return Stats;
 }
 // ============================================================

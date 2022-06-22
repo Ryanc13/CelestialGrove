@@ -8,7 +8,6 @@
 #include "Components/SceneComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "CG_PlayerCharacter.h"
-#include "CG_GlobalDefines.h"
 #include "CG_SpellBase.h"
 
 // -----------------------------------------------------------------------------------------
@@ -23,8 +22,17 @@ ACG_InteractableBase::ACG_InteractableBase()
 
 	InspectionCenter = CreateDefaultSubobject<USceneComponent>(TEXT("Inspection Center"));
 	InspectionCenter->SetupAttachment(StaticMesh);
+}
 
-	Stats = NewObject<UCG_SpellTargetStats>(UCG_SpellTargetStats::StaticClass());
+// -----------------------------------------------------------------------------------------
+void ACG_InteractableBase::BeginPlay()
+{
+	Super::BeginPlay();
+
+	Target.OwningActor = this;
+	Target.ApplyDamageDelegate.AddUObject(this, &ACG_InteractableBase::ApplyDamage);
+	Target.ApplyStatusDelegate.AddUObject(this, &ACG_InteractableBase::ApplyStatus);
+	Target.ApplyForceDelegate.AddUObject(this, &ACG_InteractableBase::ApplyForce);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -63,6 +71,12 @@ FVector ACG_InteractableBase::InspectionOffset() const
 }
 
 // -----------------------------------------------------------------------------------------
+FVector ACG_InteractableBase::GetCenterOfMass() const
+{
+	return StaticMesh->GetCenterOfMass();
+}
+
+// -----------------------------------------------------------------------------------------
 void ACG_InteractableBase::OnBeginInspection_Implementation(ACG_PlayerCharacter * player)
 {
 	player->BeginInspection(this);
@@ -80,6 +94,29 @@ void ACG_InteractableBase::OnEndInspection_Implementation(FVector throwVector, f
 	
 	if (shouldThrow)
 	{
-		StaticMesh->AddForce(throwVector * throwStrength * StaticMesh->GetMass());
+		ApplyForce(throwVector, throwStrength);
 	}
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_InteractableBase::ApplyDamage(int32 damage)
+{
+	Stats.Health = FMath::Clamp(Stats.Health - damage, 0, Stats.Health);
+
+	if (Stats.Health == 0)
+	{
+		OnDestroyed();
+	}
+	else
+	{
+		OnDamaged();
+	}
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_InteractableBase::ApplyForce(FVector direction, float strength)
+{
+	// NOTE(RyanC): Probably will end up only turning on physics when a force happens and then disable when settled.
+	// for now its just on by default.
+	StaticMesh->AddForce(direction * strength * StaticMesh->GetMass());
 }

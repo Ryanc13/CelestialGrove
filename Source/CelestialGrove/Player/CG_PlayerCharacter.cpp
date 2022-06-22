@@ -8,6 +8,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "CG_InteractableBase.h"
+#include "CG_EnemyCharacter.h"
 #include "GameFramework/PlayerController.h"
 #include "CG_SpellBase.h"
 
@@ -17,7 +18,7 @@ ACG_PlayerCharacter::ACG_PlayerCharacter()
 	// ============================================================
 	// Tick settings
 	PrimaryActorTick.bCanEverTick = true;
-	PrimaryActorTick.bStartWithTickEnabled = false;
+	PrimaryActorTick.bStartWithTickEnabled = true;
 
 	// ============================================================
 	// Create components
@@ -45,14 +46,20 @@ ACG_PlayerCharacter::ACG_PlayerCharacter()
 	MouseSensitivity = FVector2D(1.f, 1.f);
 	ThrowStrength = 800.f;
 
-	Stats = NewObject<UCG_SpellTargetStats>(UCG_SpellTargetStats::StaticClass());
+	MovementSpeed = 120.f;
+
+	ActiveSpell = 0;
 }
 
 // -----------------------------------------------------------------------------------------
 void ACG_PlayerCharacter::BeginPlay()
 {
-	check(Stats);
-	Stats->owningActor = this;
+	Super::BeginPlay();
+
+	Target.OwningActor = this;
+	Target.ApplyDamageDelegate.AddUObject(this, &ACG_PlayerCharacter::ApplyDamage);
+	Target.ApplyStatusDelegate.AddUObject(this, &ACG_PlayerCharacter::ApplyStatus);
+	Target.ApplyForceDelegate.AddUObject(this, &ACG_PlayerCharacter::ApplyForce);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -61,6 +68,7 @@ void ACG_PlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
 	PlayerInputComponent->BindAction("Interact", IE_Pressed, this, &ACG_PlayerCharacter::Interact);
+	PlayerInputComponent->BindAction("CastSpell", IE_Pressed, this, &ACG_PlayerCharacter::CastSpell);
 
 	PlayerInputComponent->BindAxis("MoveForward", this, &ACG_PlayerCharacter::MoveForward);
 	PlayerInputComponent->BindAxis("MoveRight", this, &ACG_PlayerCharacter::MoveRight);
@@ -74,18 +82,13 @@ void ACG_PlayerCharacter::Tick(float deltaTime)
 {
 	Super::Tick(deltaTime);
 
+	for (int32 i = 0; i < EquippedSpells.Num(); ++i)
+	{
+		EquippedSpells[i]->UpdateSpell(deltaTime, this);
+	}
+
 	switch(CurrentState)
 	{
-		// ============================================================
-		case EPlayerState::DEFAULT:
-		{
-			for (uint8 spellIndex : SpellsBeingCast)
-			{
-				EquippedSpells[spellIndex]->UpdateSpell(deltaTime, this);
-			}
-		}
-		break;
-
 		// ============================================================
 		case EPlayerState::INSPECTING:
 		{
@@ -108,7 +111,7 @@ void ACG_PlayerCharacter::Tick(float deltaTime)
 			{
 				// ============================================================
 				// Using the mouse deltas we are going to try and determine the intended axis of rotation
-				// when the different is above the tolerance then specifically only rotate on the 
+				// when the difference is above the tolerance then specifically only rotate on the intended axis.
 				MouseDelta.Normalize();
 				float absX = FMath::Abs<float>(MouseDelta.X);
 				float absY = FMath::Abs<float>(MouseDelta.Y);
@@ -126,7 +129,10 @@ void ACG_PlayerCharacter::Tick(float deltaTime)
 				}
 
 				MouseDelta *= InspectionRotationSpeed * deltaTime;
-				FRotator toRotate(-MouseDelta.Y, -MouseDelta.X, 0.0f);
+				FVector xRotation = GetActorUpVector() * -MouseDelta.X;
+				FVector yRotation = FirstPersonCamera->GetRightVector() * MouseDelta.Y;
+				FVector inspectSpaceDelta = xRotation + yRotation;
+				FRotator toRotate(inspectSpaceDelta.Y, inspectSpaceDelta.Z, inspectSpaceDelta.X);
 
 				FVector rotatedAnchorToObject = toRotate.RotateVector(curPosition - anchorPos);
 				FVector newLocation = anchorPos + rotatedAnchorToObject;
@@ -140,20 +146,6 @@ void ACG_PlayerCharacter::Tick(float deltaTime)
 		}
 		break;
 	}
-}
-
-// -----------------------------------------------------------------------------------------
-bool ACG_PlayerCharacter::TryCastingSpell(uint8 spellIndex)
-{
-	check(EquippedSpells.Num() > spellIndex);
-
-	if (!EquippedSpells[spellIndex]->IsSpellOnCooldown())
-	{
-		EquippedSpells[spellIndex]->OnBeginCast(this);
-		return true;
-	}
-
-	return false;
 }
 
 // -----------------------------------------------------------------------------------------
@@ -177,7 +169,7 @@ bool ACG_PlayerCharacter::TraceForCollision(FHitResult & result, float distance)
 }
 
 // -----------------------------------------------------------------------------------------
-bool ACG_PlayerCharacter::GetTargetsInSphere(ESpellCollisionType type, float radius, FVector & location, TArray<UCG_SpellTargetStats*> & targets) const
+bool ACG_PlayerCharacter::GetTargetsInSphere(ESpellCollisionType type, float radius, FVector & location, TArray<FCG_SpellTarget> & targets) const
 {
 	TArray<FOverlapResult> overlaps;
 
@@ -193,7 +185,7 @@ bool ACG_PlayerCharacter::GetTargetsInSphere(ESpellCollisionType type, float rad
 		break;
 
 		case ESpellCollisionType::ANIMATE_ONLY:
-			objParams = FCollisionObjectQueryParams(INANIMATE_COLLISION_CHANNEL);
+			objParams = FCollisionObjectQueryParams(ANIMATE_COLLISION_CHANNEL);
 		break;
 	}
 
@@ -221,14 +213,21 @@ bool ACG_PlayerCharacter::GetTargetsInSphere(ESpellCollisionType type, float rad
 			if ((type == ESpellCollisionType::ALL || type == ESpellCollisionType::INANIMATE_ONLY) &&
 				overlap.GetActor()->GetClass() == ACG_InteractableBase::StaticClass())
 			{
-				targets.Emplace(Cast<ACG_InteractableBase>(overlap.GetActor())->GetStats());
+				ACG_InteractableBase * interactable = Cast<ACG_InteractableBase>(overlap.GetActor());
+				interactable->Target.ImpactDirection = (interactable->GetCenterOfMass() - location);
+				interactable->Target.ImpactDirection.Normalize();
+
+				targets.Emplace(interactable->Target);
 			}
-			/* TODO(RyanC): Uncomment when enemy characters are implemented
 			else if ((type == ESpellCollisionType::ALL || type == ESpellCollisionType::ANIMATE_ONLY) &&
 					overlap.GetActor()->GetClass() == ACG_EnemyCharacter::StaticClass())
 			{
-				targets.Emplace(Cast<ACG_EnemyCharacter>(overlap.GetActor())->Stats);
-			}*/
+				ACG_EnemyCharacter * enemy = Cast<ACG_EnemyCharacter>(overlap.GetActor());
+				enemy->Target.ImpactDirection = (enemy->GetMesh()->GetCenterOfMass() - location);
+				enemy->Target.ImpactDirection.Normalize();
+
+				targets.Emplace(enemy->Target);
+			}
 		}
 	}
 
@@ -236,7 +235,7 @@ bool ACG_PlayerCharacter::GetTargetsInSphere(ESpellCollisionType type, float rad
 }
 
 // -----------------------------------------------------------------------------------------
-bool ACG_PlayerCharacter::GetTargetsInCone(ESpellCollisionType type, float radius, float angle, TArray<UCG_SpellTargetStats*> & targets) const
+bool ACG_PlayerCharacter::GetTargetsInCone(ESpellCollisionType type, float radius, float angle, TArray<FCG_SpellTarget> & targets) const
 {
 	FVector origin = GetActorLocation();
 	bool res = GetTargetsInSphere(type, radius, origin, targets);
@@ -245,7 +244,8 @@ bool ACG_PlayerCharacter::GetTargetsInCone(ESpellCollisionType type, float radiu
 	{
 		for (uint32 i = targets.Num() - 1; i >= 0; --i)
 		{
-			FVector originToActor = targets[i]->owningActor->GetActorLocation() - origin;
+			FVector originToActor = targets[i].OwningActor->GetActorLocation() - origin;
+			originToActor.Normalize();
 			float dot = FVector::DotProduct(originToActor, GetActorForwardVector());
 			if (FMath::Acos(dot) > angle)
 			{
@@ -255,6 +255,40 @@ bool ACG_PlayerCharacter::GetTargetsInCone(ESpellCollisionType type, float radiu
 	}
 
 	return res;
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_PlayerCharacter::SpellFinishedCasting(UCG_SpellBase * spell)
+{
+	spell->OnFinishedCastingDelegate.RemoveAll(this);
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_PlayerCharacter::ApplyDamage(int32 damage)
+{
+	Stats.Health = FMath::Clamp(Stats.Health - damage, 0, Stats.Health);
+
+	if (Stats.Health <= 0)
+	{
+		OnDeath();
+	}
+	else
+	{
+		OnDamaged();
+	}
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_PlayerCharacter::ApplyStatus(uint8 status)
+{
+	SET_FLAG(Stats.Status, status);
+	// TODO(RyanC): Need to figure out how statuses will work first.
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_PlayerCharacter::ApplyForce(FVector direction, float strength)
+{
+	// TODO(RyanC): Ignoring for now until enemies are more complete
 }
 
 // -----------------------------------------------------------------------------------------
@@ -287,6 +321,19 @@ void ACG_PlayerCharacter::Interact()
 			{
 				interactable->OnInteracted(this);
 			}
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------------------
+void ACG_PlayerCharacter::CastSpell()
+{
+	if (!IsCastingDisabled() && EquippedSpells.Num() > ActiveSpell)
+	{
+		if (!EquippedSpells[ActiveSpell]->IsSpellOnCooldown())
+		{
+			EquippedSpells[ActiveSpell]->OnBeginCast(this);
+			EquippedSpells[ActiveSpell]->OnFinishedCastingDelegate.AddUObject(this, &ACG_PlayerCharacter::SpellFinishedCasting);
 		}
 	}
 }
@@ -359,7 +406,6 @@ void ACG_PlayerCharacter::LookUp(float rate)
 void ACG_PlayerCharacter::BeginInspection(ACG_InteractableBase * const interactable)
 {
 	InspectionTarget = interactable;
-	InspectionTarget->AttachToComponent(InspectionAnchorPoint, FAttachmentTransformRules::KeepWorldTransform);
 
 	CurrentState = EPlayerState::INSPECTING;
 
@@ -368,8 +414,6 @@ void ACG_PlayerCharacter::BeginInspection(ACG_InteractableBase * const interacta
 	InputComponent->BindAction("InspectionDrag", IE_Released, this, &ACG_PlayerCharacter::StopInspectionRotation);
 
 	SetMouseCursorShown(true);
-
-	SetActorTickEnabled(true);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -387,8 +431,6 @@ void ACG_PlayerCharacter::InspectionEnded()
 	CurrentState = EPlayerState::DEFAULT;
 
 	SetMouseCursorShown(false);
-
-	SetActorTickEnabled(false);
 }
 
 // -----------------------------------------------------------------------------------------

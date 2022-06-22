@@ -6,12 +6,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/DataTable.h"
 #include "UObject/NoExportTypes.h"
 #include "CG_GlobalDefines.h"
 #include "CG_SpellBase.generated.h"
 
 class AActor;
-class UCG_SpellTargetStats;
 class UNiagaraSystem;
 class USoundCue;
 struct FGuid;
@@ -71,11 +71,16 @@ enum class ETargetingStyles : uint8
 };
 
 // ============================================================
+DECLARE_MULTICAST_DELEGATE_OneParam(FSpellFinishedCastingSignature, UCG_SpellBase *);
+
+// ============================================================
 USTRUCT(BlueprintType)
-struct CELESTIALGROVE_API FCG_SpellComponent
+struct CELESTIALGROVE_API FCG_SpellComponent : public FTableRowBase
 {
 	GENERATED_BODY()
 	
+public:
+// ============================================================
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	FGuid GUID = FGuid::NewGuid();
 
@@ -86,13 +91,19 @@ struct CELESTIALGROVE_API FCG_SpellComponent
 	ESpellComponentType Type;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	uint8 BaseStrength = 10;
+	int32 BaseEffectStrength = 10;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float BaseTargetStrenth = 10.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float BaseCooldown = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float DamageModifier = 1.0f;
+	float EffectModifier = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float TargetModifier = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float CooldownModifier = 1.0f;
@@ -119,12 +130,12 @@ class CELESTIALGROVE_API UCG_SpellBase : public UObject
 {
 	GENERATED_BODY()
 
-// ============================================================
 public:
+// ============================================================
 	UCG_SpellBase();
 
 	UFUNCTION(BlueprintCallable)
-	void BuildSpell(TArray<FCG_SpellComponent> & components);
+	void BuildSpell(UPARAM(ref) TArray<FCG_SpellComponent> & components);
 
 	UFUNCTION(BlueprintCallable)
 	void OnBeginCast(const ACG_PlayerCharacter * player);
@@ -136,7 +147,10 @@ public:
 	void OnFinishEffect(const ACG_PlayerCharacter * player);
 
 	UFUNCTION(BlueprintCallable)
-	void AddTargetToSpell(UCG_SpellTargetStats * combatant);
+	void AddTargetToSpell(UPARAM(ref) FCG_SpellTarget & target);
+
+	UFUNCTION(BlueprintCallable)
+	void AddTargetToSpellWithImpactDir(UPARAM(ref) FCG_SpellTarget & target, FVector direction);
 
 	UFUNCTION(BlueprintCallable)
 	void UpdateSpell(float deltaTime, const ACG_PlayerCharacter * player);
@@ -148,12 +162,32 @@ public:
 	const FCG_SpellComponent & GetBaseComponent() const;
 
 	UFUNCTION(BlueprintCallable)
-	FORCEINLINE uint8 GetSpellStrength() const;
+	void ApplyDamageToTargets(int32 finalDamage) const;
+
+	UFUNCTION(BlueprintCallable)
+	void ApplyStatusToTargets(ECombatStatuses newStatus) const;
+
+	UFUNCTION(BlueprintCallable)
+	void ApplyForceToTargets(float strength) const;
+
+	UFUNCTION(BlueprintCallable)
+	FORCEINLINE int32 GetSpellEffectStrength() const;
+
+	UFUNCTION(BlueprintCallable)
+	FORCEINLINE float GetSpellTargetStrength() const;
 	
 	UFUNCTION(BlueprintCallable)
 	FORCEINLINE bool IsSpellOnCooldown() const;
 
+	UFUNCTION(BlueprintCallable)
+	FORCEINLINE bool ShouldSpellCooldown() const;
+
+	UFUNCTION(BlueprintCallable)
+	FORCEINLINE ESpellComponentType GetEffectBase() const;
+
 // ============================================================
+	FSpellFinishedCastingSignature OnFinishedCastingDelegate;
+
 protected:
 // ============================================================
 	UFUNCTION(BlueprintImplementableEvent)
@@ -184,7 +218,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Gameplay)
 	ETargetingStyles TargetingStyle;
 
-// ============================================================
 private:
 // ============================================================
 	void BuildTargetingStyle();
@@ -193,23 +226,40 @@ private:
 	ESpellComponentCategory CurrentSpellStep;
 	ESpellComponentCategory BaseCategory;
 
-	uint8 SpellStrength;
+	int32 SpellEffectStrength;
+	float SpellTargetStrength;
 	float SpellCooldown;
 	float CurrentCooldown;
 
-	TArray<UCG_SpellTargetStats*> Targets;
+	TArray<FCG_SpellTarget> Targets;
 };
 
 // ============================================================
 // INLINED FUNCTIONS
 // -----------------------------------------------------------------------------------------
-FORCEINLINE uint8 UCG_SpellBase::GetSpellStrength() const
+FORCEINLINE int32 UCG_SpellBase::GetSpellEffectStrength() const
 {
-	return SpellStrength;
+	return SpellEffectStrength;
+}
+// -----------------------------------------------------------------------------------------
+FORCEINLINE float UCG_SpellBase::GetSpellTargetStrength() const
+{
+	return SpellTargetStrength;
 }
 // -----------------------------------------------------------------------------------------
 FORCEINLINE bool UCG_SpellBase::IsSpellOnCooldown() const
 {
 	return (CurrentCooldown > 0.0f);
+}
+// -----------------------------------------------------------------------------------------
+FORCEINLINE bool UCG_SpellBase::ShouldSpellCooldown() const
+{
+	return (IsSpellOnCooldown() && CurrentSpellStep == ESpellComponentCategory::NONE);
+}
+// -----------------------------------------------------------------------------------------
+FORCEINLINE ESpellComponentType UCG_SpellBase::GetEffectBase() const
+{
+	check(EffectComponents.Num() > 0);
+	return EffectComponents[0].Type;
 }
 // ============================================================

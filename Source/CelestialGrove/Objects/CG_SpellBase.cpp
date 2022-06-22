@@ -3,7 +3,7 @@
 // AUTHOR: RyanC
 // ============================================================
 
-#include "Objects/CG_SpellBase.h"
+#include "CG_SpellBase.h"
 #include "Misc/Guid.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraComponent.h"
@@ -14,36 +14,41 @@
 UCG_SpellBase::UCG_SpellBase()
 {
 	CurrentSpellStep = ESpellComponentCategory::NONE;
+
+	CurrentCooldown = 0.0f;
 }
 
 // -----------------------------------------------------------------------------------------
 void UCG_SpellBase::BuildSpell(TArray<FCG_SpellComponent> & components)
 {
 	check(components.Num() > 0);
+	// NOTE(RyanC): Not sure if i want to inforce effects being the base or not yet
+	// check(components[0].Category == ESpellComponentCategory::EFFECT);
 
 	BaseCategory = components[0].Category;
 	float cooldown = components[0].BaseCooldown;
-	float strength = components[0].BaseStrength;
+	float effectStrength = components[0].BaseEffectStrength;
+	float targetStrength = components[0].BaseTargetStrenth;
 
-	for (FCG_SpellComponent component : components)
+	for (int32 i = 0; i < components.Num(); ++i)
 	{
-		switch(component.Category)
+		switch(components[i].Category)
 		{
 			case ESpellComponentCategory::TARGETING:
 			{
-				TargetingComponents.Emplace(component);
+				TargetingComponents.Emplace(components[i]);
 			}
 			break;
 
 			case ESpellComponentCategory::EFFECT:
 			{
-				EffectComponents.Emplace(component);
+				EffectComponents.Emplace(components[i]);
 			}
 			break;
 
 			case ESpellComponentCategory::MODIFIERS:
 			{
-				ModifierComponents.Emplace(component);
+				ModifierComponents.Emplace(components[i]);
 			}
 			break;
 
@@ -51,14 +56,20 @@ void UCG_SpellBase::BuildSpell(TArray<FCG_SpellComponent> & components)
 				checkNoEntry();
 		}
 		
-		cooldown *= component.CooldownModifier;
-		strength *= component.DamageModifier;
+		// NOTE(RyanC): Base should not modify itself
+		if (i != 0)
+		{
+			cooldown *= components[i].CooldownModifier;
+			effectStrength *= components[i].EffectModifier;
+			targetStrength += components[i].TargetModifier;
+		}
 	}
 
-	SpellStrength = (uint8)strength;
+	SpellEffectStrength = (uint8)effectStrength;
+	SpellTargetStrength = targetStrength;
 	SpellCooldown = cooldown;
 
-	checkf(TargetingComponents.Num() > 1 && EffectComponents.Num() > 1, TEXT("Invalid spell! Needs 1 targeting component and 1 effect component"));
+	checkf(TargetingComponents.Num() > 0 && EffectComponents.Num() > 0, TEXT("Invalid spell! Needs 1 targeting component and 1 effect component"));
 
 	BuildTargetingStyle();
 }
@@ -102,8 +113,10 @@ void UCG_SpellBase::BuildTargetingStyle()
 	{
 		TargetingStyle = ETargetingStyles::SELF_FORWARD;
 	}
-
-	checkNoEntry();
+	else
+	{
+		checkNoEntry();
+	}
 }
 
 // -----------------------------------------------------------------------------------------
@@ -111,8 +124,10 @@ void UCG_SpellBase::OnBeginCast(const ACG_PlayerCharacter * player)
 {
 	check(TargetingComponents.Num() > 0);
 	check(EffectComponents.Num() > 0);
+	check(!IsSpellOnCooldown());
 
 	CurrentSpellStep = ESpellComponentCategory::TARGETING;
+	CurrentCooldown = SpellCooldown;
 	StartTargeting(player);
 }
 
@@ -132,22 +147,33 @@ void UCG_SpellBase::OnFinishTargeting(const ACG_PlayerCharacter * player)
 
 void UCG_SpellBase::OnFinishEffect(const ACG_PlayerCharacter * player)
 {
-	CurrentCooldown = SpellCooldown;
 	CurrentSpellStep = ESpellComponentCategory::NONE;
 	OnSpellComplete(player);
+
+	if (OnFinishedCastingDelegate.IsBound())
+	{
+		OnFinishedCastingDelegate.Broadcast(this);
+	}
 }
 
 // -----------------------------------------------------------------------------------------
-void UCG_SpellBase::AddTargetToSpell(UCG_SpellTargetStats * combatant)
+void UCG_SpellBase::AddTargetToSpell(FCG_SpellTarget & target)
 {
-	check(combatant);
-	Targets.Emplace(combatant);
+	check(target.OwningActor.IsValid());
+	Targets.Emplace(target);
+}
+
+// -----------------------------------------------------------------------------------------
+void UCG_SpellBase::AddTargetToSpellWithImpactDir(UPARAM(ref) FCG_SpellTarget & target, FVector direction)
+{
+	target.ImpactDirection = direction;
+	AddTargetToSpell(target);
 }
 
 // -----------------------------------------------------------------------------------------
 void UCG_SpellBase::UpdateSpell(float deltaTime, const ACG_PlayerCharacter * player)
 {
-	if (IsSpellOnCooldown())
+	if (ShouldSpellCooldown())
 	{
 		CurrentCooldown = FMath::Clamp(CurrentCooldown-deltaTime, 0.f, CurrentCooldown);
 	}
@@ -234,6 +260,7 @@ bool UCG_SpellBase::HasComponentsInCategory(ESpellComponentCategory category, TA
 	return true;
 }
 
+// -----------------------------------------------------------------------------------------
 const FCG_SpellComponent & UCG_SpellBase::GetBaseComponent() const
 {
 	switch (BaseCategory)
@@ -258,5 +285,35 @@ const FCG_SpellComponent & UCG_SpellBase::GetBaseComponent() const
 			return EffectComponents[0];
 		}
 		break;
+	}
+}
+
+// -----------------------------------------------------------------------------------------
+void UCG_SpellBase::ApplyDamageToTargets(int32 finalDamage) const
+{
+	for (const FCG_SpellTarget & target : Targets)
+	{
+		check(target.ApplyDamageDelegate.IsBound());
+		target.ApplyDamageDelegate.Broadcast(finalDamage);
+	}
+}
+
+// -----------------------------------------------------------------------------------------
+void UCG_SpellBase::ApplyStatusToTargets(ECombatStatuses newStatus) const
+{
+	for (const FCG_SpellTarget & target : Targets)
+	{
+		check(target.ApplyStatusDelegate.IsBound());
+		target.ApplyStatusDelegate.Broadcast((uint8)newStatus);
+	}
+}
+
+// -----------------------------------------------------------------------------------------
+void UCG_SpellBase::ApplyForceToTargets(float strength) const
+{
+	for (const FCG_SpellTarget & target : Targets)
+	{
+		check(target.ApplyForceDelegate.IsBound());
+		target.ApplyForceDelegate.Broadcast(target.ImpactDirection, strength);
 	}
 }

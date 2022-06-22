@@ -3,10 +3,9 @@
 // AUTHOR: RyanC
 // ============================================================
 
-#ifndef CG_10X_UNREAL_PARSE_FIXES_H
-#define CG_10X_UNREAL_PARSE_FIXES_H
-
 #if _FIX_UNREAL_PARSE_
+
+// Unreal is doing some grimey c++ shit, fake defines only used by editor's parser so i can get autocomplete and goto def.
 
 #include "Math/Vector.h"
 #include "Math/Vector2D.h"
@@ -20,7 +19,7 @@
 #define FVector2D UE::Math::TVector<float, 2>
 #define FRotator UE::Math::TRotator<double>
 #define FQuat UE::Math::TQuat<double>
+#define FMatrix UE::Math::TMatrix<float>
+#define FRotationMatrix UE::Math::TRotationMatrix<float>
 
 #endif // _FIX_UNREAL_PARSE_
-
-#endif // CG_10X_UNREAL_PARSE_FIXES_H

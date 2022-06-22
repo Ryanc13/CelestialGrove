@@ -7,12 +7,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "CG_GlobalDefines.h"
 #include "CG_InteractableBase.generated.h"
 
 class UStaticMeshComponent;
 class ACG_PlayerCharacter;
 class APlayerController;
-class UCG_SpellTargetStats;
 
 // ============================================================
 UENUM(BlueprintType, Meta = (Bitflags, UseEnumValuesAsMaskValuesInEditor = "true"))
@@ -33,27 +33,45 @@ class CELESTIALGROVE_API ACG_InteractableBase : public AActor
 {
 	GENERATED_BODY()
 	
-public:	
-	// Sets default values for this actor's properties
+public:
+// ============================================================
 	ACG_InteractableBase();
+	
+	virtual void BeginPlay() override;
 
 	UFUNCTION(BlueprintCallable)
 	void OnInteracted(ACG_PlayerCharacter * player);
 
 	FVector InspectionOffset() const;
+	FVector GetCenterOfMass() const;
 
 	UFUNCTION(BlueprintNativeEvent)
 	void OnEndInspection(FVector throwVector, float throwStrength, bool shouldThrow = true);
 	void OnEndInspection_Implementation(FVector throwVector, float throwStrength, bool shouldThrow = true);
-	
-	FORCEINLINE UCG_SpellTargetStats * GetStats() const;
+
+// ===========================================================
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Gameplay)
+	FCG_Stats Stats;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = Gameplay)
+	FCG_SpellTarget Target;
 
 protected:
+// ============================================================
 	UFUNCTION(BlueprintImplementableEvent)
 	void Interact(ACG_PlayerCharacter * player);
 
 	UFUNCTION(BlueprintImplementableEvent)
 	void Loot(ACG_PlayerCharacter * player);
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void OnDamaged();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void OnDestroyed();
+
+	UFUNCTION(BlueprintImplementableEvent)
+	void ApplyStatus(uint8 status); // NOTE(RyanC): not sure of the use of this yet but implementing it just in case
 
 	UFUNCTION(BlueprintNativeEvent)
 	void OnBeginInspection(ACG_PlayerCharacter * player);
@@ -66,18 +84,11 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Gameplay)
 	TObjectPtr<USceneComponent> InspectionCenter;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Gameplay)
-	TObjectPtr<UCG_SpellTargetStats> Stats;
-
 	UPROPERTY(EditAnywhere, Meta = (Bitmask, BitmaskEnum = "EInteractableFlags"))
 	uint8 Interactions;
-};
 
+private:
 // ============================================================
-// Inlined Functions
-// -----------------------------------------------------------------------------------------
-FORCEINLINE UCG_SpellTargetStats * ACG_InteractableBase::GetStats() const
-{
-	return Stats;
-}
-// ============================================================
+	void ApplyDamage(int32 damage);
+	void ApplyForce(FVector direction, float strength);
+};
